@@ -3,6 +3,7 @@ There are three options for installing Telemt:
  - [Automated installation using a script](#very-quick-start).
  - [Manual installation of Telemt as a service](#telemt-via-systemd).
  - [Installation using Docker Compose](#telemt-via-docker-compose).
+ - [Installation without Docker Compose](#telemt-without-docker-compose).
 
 # Very quick start
 
@@ -237,18 +238,95 @@ curl -s http://127.0.0.1:9091/v1/users | jq -r '.data[] | "[\(.username)]", (.li
 
 # Telemt via Docker Compose
 
-**1. Edit `config.toml` in repo root (at least: port, users secrets, tls_domain)**  
-**2. Start container:**
+> All commands and steps are performed in the project folder (for example in `/opt/telemt`)
+
+**0. Generate secrets**
+
+Generate 16 bytes/32 characters in HEX format with OpenSSL or another way:
 ```bash
-docker compose up -d --build
+openssl rand -hex 16
+```
+Save it for use in the next step.
+
+**1. Create `config` folder, create into it a file `config.toml` (change at least: users secrets, tls_domain)**
+```toml
+### Telemt Based Config.toml
+# We believe that these settings are sufficient for most scenarios 
+# where cutting-egde methods and parameters or special solutions are not needed
+
+# === General Settings ===
+[general]
+use_middle_proxy = false
+# Global ad_tag fallback when user has no per-user tag in [access.user_ad_tags]
+# ad_tag = "00000000000000000000000000000000"
+# Per-user ad_tag in [access.user_ad_tags] (32 hex from @MTProxybot)
+
+# === Log Level ===
+# Log level: debug | verbose | normal | silent
+# Can be overridden with --silent or --log-level CLI flags
+# RUST_LOG env var takes absolute priority over all of these
+log_level = "normal"
+
+[general.modes]
+classic = false
+secure = false
+tls = true
+
+[general.links]
+show = "*"
+# show = ["alice", "bob"] # Only show links for alice and bob
+# show = "*"              # Show links for all users
+# public_host = "proxy.example.com"  # Host (IP or domain) for tg:// links
+# public_port = 443                  # Port for tg:// links (default: server.port)
+
+# === Server Binding ===
+[server]
+port = 443
+# proxy_protocol = false            # Enable if behind HAProxy/nginx with PROXY protocol
+# metrics_port = 9090
+# metrics_listen = "127.0.0.1:9090" # Listen address for metrics (overrides metrics_port)
+# metrics_whitelist = ["127.0.0.1/32", "::1/128"]
+
+[server.api]
+enabled = true
+listen = "0.0.0.0:9091"
+whitelist = ["127.0.0.1/32", "::1/128", "0.0.0.0/0"]
+minimal_runtime_enabled = false
+minimal_runtime_cache_ttl_ms = 1000
+
+# Listen on multiple interfaces/IPs - IPv4
+[[server.listeners]]
+ip = "0.0.0.0"
+
+# === Anti-Censorship & Masking ===
+[censorship]
+tls_domain = "petrovich.ru"  # Fake-TLS / SNI masking domain used in generated ee-links
+mask = true
+tls_emulation = true         # Fetch real cert lengths and emulate TLS records
+tls_front_dir = "tlsfront"   # Cache directory for TLS emulation
+
+[access.users]
+# format: "username" = "32_hex_chars_secret"
+hello = "00000000000000000000000000000000"
+```
+> [!WARNING]
+> Replace the value of the `hello` parameter with the value you obtained in step 0.  
+> Additionally, change the value of the `tls_domain` parameter to a different website.
+> Changing the `tls_domain` parameter will break all links that use the old domain!
+
+**2. Put in project folder [compose file](../../docker-compose.yml) and start container:**
+```bash
+docker compose up -d
 ```
 **3. Check logs:**
 ```bash
 docker compose logs -f telemt
 ```
-**4. Stop:**
+**4. To get the link(s), enter**:
 ```bash
-docker compose down
+curl -s http://127.0.0.1:9091/v1/users | jq -r '.data[] | "[\(.username)]", (.links.classic[]? | "classic: \(.)"), (.links.secure[]? | "secure: \(.)"), (.links.tls[]? | "tls: \(.)"), ""'
+```
+
 ```
 > [!NOTE]
 > - `docker-compose.yml` maps `./config.toml` to `/app/config.toml` (read-only)
@@ -267,8 +345,9 @@ services:
       - /run/telemt:rw,mode=1777,size=4m
     command: /usr/local/bin/telemt /etc/telemt/config.toml
 ```
+# Telemt without Docker Compose
 
-**Run without Compose**
+**Run**
 ```bash
 docker build -t telemt:local .
 docker run --name telemt --restart unless-stopped \
